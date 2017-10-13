@@ -22,7 +22,7 @@ export default function(
   // Explicitly declare/initialize of scope variables we use
   $scope.data = {
     placeQuery: null, // The place object used to search
-    queryText: "", // The actual text in the box used only for the clear button
+    searchBoxText: "", // The actual text in the box used only for the clear button
     // Different types of route data
     activatedCrowdstartRoutes: [],
     recentRoutes: [],
@@ -48,58 +48,210 @@ export default function(
     $scope.placesService = LazyLoadService(() => new google.maps.places.PlacesService(searchBox))
   });
 
-  function autoComplete() {
-    let searchBox = document.getElementById('search');
-    if (!$scope.data.queryText || !$scope.autocompleteService) {
-      $scope.data.isFiltering = false;
-      return;
-    };
-    // show the spinner
-    $scope.data.isFiltering = true;
-    $scope.$digest();
-    // default 'place' object only has 'queryText' but no geometry
+  function newSearch () {
+    if (!$scope.data.searchBoxText) {
+      return
+    }
+    $scope.data.isFiltering = true
+    $scope.$digest()
+
+    // Perform initial update of routes using text filter
+    $scope.data.placeQuery = null
+    updateRoutes()
+
+    // Check if we need to make place query
+    let minNumRoutes = 3
+    let performPlaceQuery = ($scope.data.routes.length 
+                            +$scope.data.crowdstartRoutes.length) < minNumRoutes
+
+    if (performPlaceQuery) {
+      // Note: getPlace() will handle setting $scope.data.isFiltering and 
+      // calling $scope.digest()
+      getPlace()
+    } else {
+      $scope.data.isFiltering = false
+      $scope.$digest()
+    }
+  }
+
+  function updateRoutes () {
+    updateNormalRoutes(RoutesService.getRoutesWithRoutePass())
+    updateRecentRoutes(RoutesService.getRecentRoutes(),
+                       RoutesService.getRoutesWithRoutePass())
+    updateLiteRoutes(LiteRoutesService.getLiteRoutes(),
+                     LiteRouteSubscriptionService.getSubscriptionSummary())
+    updateActivatedKickstarterRoutes(RoutesService.getActivatedKickstarterRoutes())
+    updateBackedKickstarterRoutes(KickstarterService.getCrowdstart(),
+                                  KickstarterService.getBids())
+    updateUnactivatedKickstarterRoutes(KickstarterService.getCrowdstart(),
+                                       KickstarterService.getBids())
+  }
+
+  function getPlace () {
+    if (!$scope.data.searchBoxText || !$scope.autocompleteService) {
+      return
+    }
+
     // if has predicted place assign the 1st prediction to place object
-    let place = {queryText: $scope.data.queryText};
-    const currentAutoComplete = $scope.autocompleteService().getPlacePredictions({
+    $scope.autocompleteService().getPlacePredictions({
       componentRestrictions: {country: 'SG'},
-      input: $scope.data.queryText
-    }, (predictions) => {
-      // If no results found then just shortcircuit with the empty place
+      input: $scope.data.searchBoxText
+    }, predictions => {
+      // If no results found then we can't do place query so just return null
       if (!predictions || predictions.length === 0) {
-        $scope.data.placeQuery =  place;
-        $scope.data.isFiltering = false;
-        $scope.$digest();
-        return;
+        return
       }
-      // Grab the top prediction and get the details
+
       // Apply the details as the full result
       $scope.placesService().getDetails({
         placeId: predictions[0].place_id
       }, result => {
-        // If we fail getting the details then shortcircuit
-        if (!result) {
-          $scope.data.placeQuery =  place;
-          $scope.data.isFiltering = false;
-          $scope.$digest();
-          return;
-        }
-        // Otherwise return the fully formed place
-        place = _.assign(place,result);
-        // Return the found place
-        $scope.data.placeQuery =  place;
-        $scope.data.isFiltering = false;
-        $scope.$digest();
+        $scope.data.placeQuery = result
+        updateRoutes()
+        $scope.data.isFiltering = false
+        $scope.$digest()
       });
     })
+  }
+
+  function updateNormalRoutes (allRoutes) {
+    allRoutes = allRoutes ? allRoutes : []
+    
+    // Filter the routes
+    if ($scope.data.placeQuery) {
+      allRoutes = SearchService.filterRoutesByPlaceAndText(
+        allRoutes, $scope.data.placeQuery, $scope.data.searchBoxText)
+    } else {
+      allRoutes = SearchService.filterRoutesByText(allRoutes, $scope.data.searchBoxText)
+    }
+
+    // Sort the routes by the time of day
+    $scope.data.routes = _.sortBy(allRoutes, 'label', route => {
+      var firstTripStop = _.get(route, 'trips[0].tripStops[0]')
+      var midnightOfTrip = new Date(firstTripStop.time.getTime())
+      midnightOfTrip.setHours(0, 0, 0, 0)
+      return firstTripStop.time.getTime() - midnightOfTrip.getTime()
+    })
+  }
+
+  function updateRecentRoutes (recentRoutes, allRoutes) {
+    recentRoutes = recentRoutes ? recentRoutes : []
+    allRoutes = allRoutes ? allRoutes : []
+    let textFilteredAllRoutes = SearchService.filterRoutesByText(allRoutes, $scope.data.searchBoxText)
+
+    // "Fill in" the recent routes with the all routes data
+    let allRoutesById = _.keyBy(textFilteredAllRoutes, 'id');
+
+    $scope.data.recentRoutes = recentRoutes.map(recentRoute => {
+      return _.assign({
+        alightStopStopId: recentRoute.alightStopStopId,
+        boardStopStopId: recentRoute.boardStopStopId
+      }, allRoutesById[recentRoute.id]);
+    // Clean out "junk" routes which may be old/obsolete
+    }).filter(route => route && route.id !== undefined)
+
+    $scope.data.recentRoutesById = _.keyBy($scope.data.recentRoutes, 'id')
+  }
+
+  function updateLiteRoutes (liteRoutes, subscribed) {
+    liteRoutes = liteRoutes ? liteRoutes : []
+    liteRoutes = Object.values(liteRoutes)
+    
+    // Filter the routes
+    if ($scope.data.placeQuery) {
+      liteRoutes = SearchService.filterRoutesByPlaceAndText(
+        liteRoutes, $scope.data.placeQuery, $scope.data.searchBoxText)
+    } else {
+      liteRoutes = SearchService.filterRoutesByText(
+        liteRoutes, $scope.data.searchBoxText)
+    }
+
+    // Add the subscription information
+    _.forEach(liteRoutes, liteRoute => {
+      liteRoute.isSubscribed = !!subscribed.includes(liteRoute.label);
+    })
+
+    // Sort by label and publish
+    $scope.data.liteRoutes = _.sortBy(liteRoutes, route => {
+      return parseInt(route.label.slice(1));
+    });
+  }
+
+  function updateActivatedKickstarterRoutes (kickstartedRoutes) {
+    kickstartedRoutes = kickstartedRoutes ? kickstartedRoutes : []
+    if ($scope.data.placeQuery) {
+      $scope.data.activatedCrowdstartRoutes = SearchService.filterRoutesByPlaceAndText(
+        kickstartedRoutes, $scope.data.placeQuery, $scope.data.searchBoxText)
+    } else {
+      $scope.data.activatedCrowdstartRoutes = SearchService.filterRoutesByText(
+        kickstartedRoutes, $scope.data.searchBoxText)
+    }
+  }
+
+  function updateBackedKickstarterRoutes (routes, bids) {
+    routes = routes ? routes : []
+    bids = bids ? bids : []
+
+    // Filter to the routes the user bidded on
+    let biddedRouteIds = bids.map(bid => bid.routeId);
+    routes = routes.filter(route => {
+      return biddedRouteIds.includes(route.id.toString());
+    });
+
+    // don't display it in backed list if the pass expires after 1 month of 1st trip
+    //and don't display it if it's 7 days after expired and not actived
+    routes = routes.filter((route)=>(!route.passExpired && route.isActived)
+                                      || !route.isExpired || !route.is7DaysOld);
+
+    // Filter the routes
+    if ($scope.data.placeQuery) {
+      routes = SearchService.filterRoutesByPlaceAndText(
+        routes, $scope.data.placeQuery, $scope.data.searchBoxText)
+    } else {
+      routes = SearchService.filterRoutesByText(
+        routes, $scope.data.searchBoxText)
+    }
+
+    // Map to scope once done filtering and sorting
+    $scope.data.biddedCrowdstartRoutes = _.sortBy(routes, route => {
+      return parseInt(route.label.slice(1));
+    });
+  }
+
+  function updateUnactivatedKickstarterRoutes (routes, bids) {
+    routes = routes ? routes : []
+    bids = bids ? bids : []
+    // Filter out the routes the user bidded on
+    // These are already shown elsewhere
+    let biddedRouteIds = bids.map(bid => bid.routeId);
+    routes = routes.filter(route => {
+      return !biddedRouteIds.includes(route.id.toString());
+    });
+    // Filter out the expired routes
+    routes = routes.filter(route => !route.isExpired);
+
+    // Filter the routes
+    if ($scope.data.placeQuery) {
+      routes = SearchService.filterRoutesByPlaceAndText(
+        routes, $scope.data.placeQuery, $scope.data.searchBoxText)
+    } else {
+    routes = SearchService.filterRoutesByText(
+      routes, $scope.data.searchBoxText)
+    }
+
+    // Map to scope once done filtering and sorting
+    $scope.data.crowdstartRoutes = _.sortBy(routes, route => {
+      return parseInt(route.label.slice(1));
+    });
+
   }
   // ---------------------------------------------------------------------------
   // UI Hooks
   // ---------------------------------------------------------------------------
 
-  $scope.$watch('data.queryText',
-    _.debounce(autoComplete, 1000, {leading: false, trailing: true})
+  $scope.$watch('data.searchBoxText',
+    _.debounce(newSearch, 1000, {leading: false, trailing: true})
   )
-
 
   // Manually pull the newest data from the server
   // Report any errors that happen
@@ -128,8 +280,8 @@ export default function(
     })
   };
 
-  $scope.$watch("data.queryText", (queryText) => {
-    if (queryText.length === 0) $scope.data.placeQuery = null;
+  $scope.$watch("data.searchBoxText", (searchBoxText) => {
+    if (searchBoxText.length === 0) $scope.data.placeQuery = null;
   });
 
   // ---------------------------------------------------------------------------
@@ -137,22 +289,11 @@ export default function(
   // ---------------------------------------------------------------------------
   // Kickstarted routes
   $scope.$watchGroup(
-    [() => RoutesService.getActivatedKickstarterRoutes(), 'data.placeQuery'],
-    ([routes, placeQuery]) => {
+    [() => RoutesService.getActivatedKickstarterRoutes()],
+    ([routes]) => {
       // Input validation
       if (!routes) routes = [];
-      // Filtering
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByPlaceAndText(
-          routes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByText(
-          routes, placeQuery.queryText
-        );
-      }
-      // Publish
-      $scope.data.activatedCrowdstartRoutes = routes;
+      updateActivatedKickstarterRoutes(routes)
     }
   );
 
@@ -162,33 +303,14 @@ export default function(
     [
       () => RoutesService.getRecentRoutes(),
       () => RoutesService.getRoutesWithRoutePass(),
-      'data.placeQuery'
     ],
-    ([recentRoutes, allRoutes, placeQuery]) => {
+    ([recentRoutes, allRoutes]) => {
       // If we cant find route data here then proceed with empty
       // This allows it to organically "clear" any state
       if (!recentRoutes) recentRoutes = [];
       if (!allRoutes) allRoutes = [];
-      // Filtering
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        allRoutes = SearchService.filterRoutesByPlaceAndText(
-          allRoutes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        allRoutes = SearchService.filterRoutesByText(
-          allRoutes, placeQuery.queryText
-        );
-      }
-      // "Fill in" the recent routes with the all routes data
-      let allRoutesById = _.keyBy(allRoutes, 'id');
-      $scope.data.recentRoutes = recentRoutes.map( (recentRoute) => {
-        return _.assign({
-          alightStopStopId: recentRoute.alightStopStopId,
-          boardStopStopId: recentRoute.boardStopStopId
-        }, allRoutesById[recentRoute.id]);
-      // Clean out "junk" routes which may be old/obsolete
-      }).filter( (route)=> route && route.id !== undefined);
-      $scope.data.recentRoutesById = _.keyBy($scope.data.recentRoutes,'id');
+
+      updateRecentRoutes(recentRoutes, allRoutes)
     }
   );
 
@@ -242,36 +364,11 @@ export default function(
     [
       () => KickstarterService.getCrowdstart(),
       () => KickstarterService.getBids(),
-      'data.placeQuery'
     ],
-    ([routes, bids, placeQuery]) => {
+    ([routes, bids]) => {
       if (!routes) routes = [];
       if (!bids) bids = [];
-      // Filter to the routes the user bidded on
-      let biddedRouteIds = bids.map(bid => bid.routeId);
-      routes = routes.filter(route => {
-        return biddedRouteIds.includes(route.id.toString());
-      });
-
-      // don't display it in backed list if the pass expires after 1 month of 1st trip
-      //and don't display it if it's 7 days after expired and not actived
-      routes = routes.filter((route)=>(!route.passExpired && route.isActived)
-                                        || !route.isExpired || !route.is7DaysOld);
-
-      // Filter the routes
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByPlaceAndText(
-          routes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByText(
-          routes, placeQuery.queryText
-        );
-      }
-      // Map to scope once done filtering and sorting
-      $scope.data.biddedCrowdstartRoutes = _.sortBy(routes, route => {
-        return parseInt(route.label.slice(1));
-      });
+      updateBackedKickstarterRoutes(routes, bids)
     }
   );
 
@@ -280,58 +377,22 @@ export default function(
     [
       () => LiteRoutesService.getLiteRoutes(),
       () => LiteRouteSubscriptionService.getSubscriptionSummary(),
-      'data.placeQuery'
     ],
-    ([liteRoutes, subscribed, placeQuery]) =>{
+    ([liteRoutes, subscribed]) =>{
       // Input validation
       if (!liteRoutes) liteRoutes = [];
-      liteRoutes = Object.values(liteRoutes);
-      // Filtering
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        liteRoutes = SearchService.filterRoutesByPlaceAndText(
-          liteRoutes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        liteRoutes = SearchService.filterRoutesByText(
-          liteRoutes, placeQuery.queryText
-        );
-      }
-     // Add the subscription information
-      _.forEach(liteRoutes, (liteRoute) => {
-        liteRoute.isSubscribed = !!subscribed.includes(liteRoute.label);
-      });
-      // Sort by label and publish
-      $scope.data.liteRoutes = _.sortBy(liteRoutes, route => {
-        return parseInt(route.label.slice(1));
-      });
+      updateLiteRoutes(liteRoutes, subscribed)
     }
   )
 
   // Normal routes
   // Sort them by start time
   $scope.$watchGroup(
-    [() => RoutesService.getRoutesWithRoutePass(), "data.placeQuery"],
-    ([allRoutes, placeQuery]) => {
+    [() => RoutesService.getRoutesWithRoutePass()],
+    ([normalRoutes]) => {
       // Input validation
-      if (!allRoutes) allRoutes = [];
-      // Filter routes
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        allRoutes = SearchService.filterRoutesByPlaceAndText(
-          allRoutes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        allRoutes = SearchService.filterRoutesByText(
-          allRoutes,
-          placeQuery.queryText
-        );
-      }
-      // Sort the routes by the time of day
-      $scope.data.routes = _.sortBy(allRoutes, 'label', (route) => {
-        var firstTripStop = _.get(route, 'trips[0].tripStops[0]');
-        var midnightOfTrip = new Date(firstTripStop.time.getTime());
-        midnightOfTrip.setHours(0,0,0,0);
-        return firstTripStop.time.getTime() - midnightOfTrip.getTime();
-      });
+      if (!normalRoutes) normalRoutes = []
+      updateNormalRoutes(normalRoutes)
     }
   );
 
@@ -340,36 +401,13 @@ export default function(
     [
       () => KickstarterService.getCrowdstart(),
       () => KickstarterService.getBids(),
-      'data.placeQuery'
     ],
-    ([routes, bids, placeQuery]) => {
+    ([routes, bids]) => {
       if (!routes) routes = [];
       if (!bids) bids = [];
-      // Filter out the routes the user bidded on
-      // These are already shown elsewhere
-      let biddedRouteIds = bids.map(bid => bid.routeId);
-      routes = routes.filter(route => {
-        return !biddedRouteIds.includes(route.id.toString());
-      });
-      // Filter out the expired routes
-      routes = routes.filter(route => !route.isExpired);
-      // Filter the routes
-      if (placeQuery && placeQuery.geometry && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByPlaceAndText(
-          routes, placeQuery, placeQuery.queryText
-        );
-      } else if (placeQuery && placeQuery.queryText) {
-        routes = SearchService.filterRoutesByText(
-          routes, placeQuery.queryText
-        );
-      }
-      // Map to scope once done filtering and sorting
-      $scope.data.crowdstartRoutes = _.sortBy(routes, route => {
-        return parseInt(route.label.slice(1));
-      });
+      updateUnactivatedKickstarterRoutes(routes, bids)
     }
   );
-
 
   // ---------------------------------------------------------------------------
   // Misc

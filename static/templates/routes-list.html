@@ -7,14 +7,14 @@
         <input
           id="search"
           type="text"
-          ng-model="data.queryText"
+          ng-model="data.searchBoxText"
           placeholder="Search Routes"
         />
         <ion-spinner ng-show="data.isFiltering"></ion-spinner>
         <i
           class="icon ion-android-close"
-          on-tap="data.queryText = ''"
-          ng-show="data.queryText.length > 0"
+          on-tap="data.searchBoxText = ''"
+          ng-show="data.searchBoxText.length > 0"
         ></i>
       </label>
     </div>
@@ -78,13 +78,13 @@
 
         <!-- Route you may like -->
         <!-- hide it if search bar is not empty -->
-        <div class="item item-divider" ng-if="data.routesYouMayLike.length > 0 && !data.queryText">
+        <div class="item item-divider" ng-if="data.routesYouMayLike.length > 0 && !data.searchBoxText">
           Routes You May Like
         </div>
         <!-- hide route item if search bar is not empty -->
         <ion-item
           ng-repeat="route in data.routesYouMayLike"
-          ng-if="!data.queryText"
+          ng-if="!data.searchBoxText"
           ui-sref="tabs.route-detail({
             routeId: route.id
           })"
@@ -161,7 +161,7 @@
               data.placeQuery"
         class="not-found-message text-center"
       >
-        Sorry, we could not find any routes matching "{{data.queryText}}".
+        Sorry, we could not find any routes matching "{{data.searchBoxText}}".
       </p>
     </ion-content>
 
