@@ -59,6 +59,21 @@ export default function(
     $scope.data.placeQuery = null
     updateRoutes()
 
+    $scope.data.isFiltering = false
+    $scope.$digest()
+
+    handlePlaceQuery()
+  }
+
+  function handlePlaceQuery () {
+    if ($scope.data.placeQuery) {
+      return
+    }
+
+    if (!$scope.data.routes || !$scope.data.crowdstartRoutes) {
+      return
+    }
+
     // Check if we need to make place query
     let minNumRoutes = 3
     let performPlaceQuery = ($scope.data.routes.length 
@@ -69,8 +84,6 @@ export default function(
       // calling $scope.digest()
       getPlace()
     } else {
-      $scope.data.isFiltering = false
-      $scope.$digest()
     }
   }
 
@@ -91,6 +104,9 @@ export default function(
     if (!$scope.data.searchBoxText || !$scope.autocompleteService) {
       return
     }
+
+    $scope.data.isFiltering = true
+    $scope.$digest()
 
     // if has predicted place assign the 1st prediction to place object
     $scope.autocompleteService().getPlacePredictions({
@@ -115,8 +131,10 @@ export default function(
   }
 
   function updateNormalRoutes (allRoutes) {
-    allRoutes = allRoutes ? allRoutes : []
-    
+    if (allRoutes === null) {
+      return
+    }
+
     // Filter the routes
     if ($scope.data.placeQuery) {
       allRoutes = SearchService.filterRoutesByPlaceAndText(
@@ -132,11 +150,15 @@ export default function(
       midnightOfTrip.setHours(0, 0, 0, 0)
       return firstTripStop.time.getTime() - midnightOfTrip.getTime()
     })
+
+    handlePlaceQuery()
   }
 
   function updateRecentRoutes (recentRoutes, allRoutes) {
-    recentRoutes = recentRoutes ? recentRoutes : []
-    allRoutes = allRoutes ? allRoutes : []
+    if (recentRoutes === null || allRoutes === null) {
+      return
+    }
+
     let textFilteredAllRoutes = SearchService.filterRoutesByText(allRoutes, $scope.data.searchBoxText)
 
     // "Fill in" the recent routes with the all routes data
@@ -151,12 +173,17 @@ export default function(
     }).filter(route => route && route.id !== undefined)
 
     $scope.data.recentRoutesById = _.keyBy($scope.data.recentRoutes, 'id')
+
+    handlePlaceQuery()
   }
 
   function updateLiteRoutes (liteRoutes, subscribed) {
-    liteRoutes = liteRoutes ? liteRoutes : []
+    if (liteRoutes === null) {
+      return
+    }
+
     liteRoutes = Object.values(liteRoutes)
-    
+
     // Filter the routes
     if ($scope.data.placeQuery) {
       liteRoutes = SearchService.filterRoutesByPlaceAndText(
@@ -175,10 +202,15 @@ export default function(
     $scope.data.liteRoutes = _.sortBy(liteRoutes, route => {
       return parseInt(route.label.slice(1));
     });
+
+    handlePlaceQuery()
   }
 
   function updateActivatedKickstarterRoutes (kickstartedRoutes) {
-    kickstartedRoutes = kickstartedRoutes ? kickstartedRoutes : []
+    if (kickstartedRoutes === null) {
+      return
+    }
+
     if ($scope.data.placeQuery) {
       $scope.data.activatedCrowdstartRoutes = SearchService.filterRoutesByPlaceAndText(
         kickstartedRoutes, $scope.data.placeQuery, $scope.data.searchBoxText)
@@ -186,11 +218,14 @@ export default function(
       $scope.data.activatedCrowdstartRoutes = SearchService.filterRoutesByText(
         kickstartedRoutes, $scope.data.searchBoxText)
     }
+
+    handlePlaceQuery()
   }
 
   function updateBackedKickstarterRoutes (routes, bids) {
-    routes = routes ? routes : []
-    bids = bids ? bids : []
+    if (routes === null || bids === null) {
+      return
+    }
 
     // Filter to the routes the user bidded on
     let biddedRouteIds = bids.map(bid => bid.routeId);
@@ -216,11 +251,15 @@ export default function(
     $scope.data.biddedCrowdstartRoutes = _.sortBy(routes, route => {
       return parseInt(route.label.slice(1));
     });
+
+    handlePlaceQuery()
   }
 
   function updateUnactivatedKickstarterRoutes (routes, bids) {
-    routes = routes ? routes : []
-    bids = bids ? bids : []
+    if (routes === null || bids === null) {
+      return
+    }
+
     // Filter out the routes the user bidded on
     // These are already shown elsewhere
     let biddedRouteIds = bids.map(bid => bid.routeId);
@@ -244,6 +283,7 @@ export default function(
       return parseInt(route.label.slice(1));
     });
 
+    handlePlaceQuery()
   }
   // ---------------------------------------------------------------------------
   // UI Hooks
